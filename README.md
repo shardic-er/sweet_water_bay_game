@@ -90,12 +90,6 @@ npm install
 
 ### 4. Configure Environment Variables
 
-Option A: Use the setup script (recommended)
-```bash
-npm run setup
-```
-
-Option B: Manual setup
 1. Copy `.env.example` to `.env`
 2. Edit `.env` and add your credentials:
 ```
@@ -124,41 +118,35 @@ Once the bot is running and invited to your server:
 
 This will:
 - Create a "Sweetwater Bay RPG" category
-- Create `#about`, `#faq`, `#how-to-play` (read-only) channels
-- Create `#bot-commands` channel
-- Populate all channels with content from `discord_channel_templates/`
+- Create `#welcome` (read-only) channel
+- Create `#sweetwater-bay` channel where players type `!start`
+- Populate channels with content from `src/discord_channel_templates/`
 - Set proper permissions (read-only for info channels)
 
 **Important:** Only the server owner can use `!bootstrap`. Other users will be denied.
 
 ## Managing Channel Content
 
-All channel content is stored in markdown files in the `discord_channel_templates/` folder:
-- `about.md` - Setting and theme information
-- `faq.md` - Frequently asked questions
-- `how-to-play.md` - Detailed gameplay instructions
+All channel content is stored in markdown files in the `src/discord_channel_templates/` folder:
+- `welcome.md` - Game overview and how to start
+- `sweetwater-bay.md` - Instructions for the main game channel
 
 To update channel content:
 
-1. Edit the `.md` files in `discord_channel_templates/`
+1. Edit the `.md` files in `src/discord_channel_templates/`
 2. Type `!bootstrap` again in Discord (as server owner)
 3. The bot will clear and re-post updated content
 
-This makes it easy to:
-- Update game information
-- Add new FAQ entries
-- Modify gameplay instructions
-- Customize content for your server
-- Edit in markdown with syntax highlighting
+This makes it easy to update game information, modify instructions, or customize content for your server.
 
 ### Available Commands
 
-In the `#bot-commands` channel:
+In the `#sweetwater-bay` channel:
 - `!start` - Begin your adventure (creates a private game thread)
 
 ### Starting a Game
 
-1. Go to the `#bot-commands` channel
+1. Go to the `#sweetwater-bay` channel
 2. Type: `!start`
 3. The bot will create a private thread visible only to you and the server owner
 4. You'll receive a welcome message explaining your character and mission
@@ -182,7 +170,7 @@ In the `#bot-commands` channel:
 
 ### Channel Moderation
 
-- The bot automatically deletes non-command messages in `#bot-commands`
+- The bot automatically deletes non-command messages in `#sweetwater-bay`
 - This keeps the channel clean for game commands
 - Players can chat freely in any other channel
 
@@ -190,27 +178,30 @@ In the `#bot-commands` channel:
 
 ```
 sweet_water_bay_game/
-├── bot.js                          # Main bot code
-├── package.json                     # Node.js dependencies
-├── sweetwater_bay_dm_guide.md      # Complete DM guide (loaded as AI context)
-├── .env                             # Your credentials (not committed to git)
-├── .env.example                     # Template for environment variables
-├── game_sessions.json              # Persistent storage for game sessions
-└── README.md                        # This file
+├── src/
+│   ├── bot.js                          # Main bot code
+│   ├── sweetwater_bay_dm_guide.md      # Complete DM guide (loaded as AI context)
+│   ├── discord_channel_templates/      # Channel content markdown files
+│   └── game_sessions.json              # Persistent storage for game sessions
+├── package.json                         # Node.js dependencies
+├── .env                                 # Your credentials (not committed to git)
+├── .env.example                         # Template for environment variables
+├── CLAUDE.md                            # AI assistant guidance
+└── README.md                            # This file
 ```
 
 ## Technical Details
 
 ### Session Storage
 
-- Game sessions are stored in `game_sessions.json`
+- Game sessions are stored in `src/game_sessions.json`
 - Each thread has its own conversation history
 - Sessions persist across bot restarts
 - File is automatically created on first run
 
 ### API Usage
 
-- Uses Claude 3.5 Sonnet model
+- Uses Claude Sonnet 4.5 model
 - Max 2048 tokens per response (balanced for Discord messages)
 - Full DM guide is included in system prompt for each request
 - Conversation history is maintained per thread
@@ -254,21 +245,21 @@ sweet_water_bay_game/
 
 ### Changing the AI Model
 
-Edit `bot.js`, around line 95:
+Edit `src/bot.js`, around line 264:
 ```javascript
-model: 'claude-3-5-sonnet-20241022',  // Change to other Claude models
+model: 'claude-sonnet-4-5',  // Change to other Claude models
 ```
 
 ### Adjusting Response Length
 
-Edit `bot.js`, around line 96:
+Edit `src/bot.js`, around line 265:
 ```javascript
 max_tokens: 2048,  // Increase for longer responses
 ```
 
 ### Thread Auto-Archive Time
 
-Edit `bot.js`, around line 130:
+Edit `src/bot.js`, around line 340:
 ```javascript
 autoArchiveDuration: 1440,  // Minutes (60, 1440, 4320, 10080)
 ```
@@ -278,7 +269,7 @@ autoArchiveDuration: 1440,  // Minutes (60, 1440, 4320, 10080)
 For issues with:
 - Discord bot setup: Check Discord.js documentation
 - Claude API: Check Anthropic documentation
-- Game content: Refer to sweetwater_bay_dm_guide.md
+- Game content: Refer to src/sweetwater_bay_dm_guide.md
 
 ## License
 

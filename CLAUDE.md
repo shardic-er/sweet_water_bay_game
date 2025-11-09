@@ -11,7 +11,6 @@ This is a Discord bot that runs the Sweetwater Bay tabletop RPG scenario using C
 ### Setup
 ```bash
 npm install                  # Install dependencies
-npm run setup               # Interactive .env configuration
 ```
 
 ### Development & Running
@@ -99,16 +98,15 @@ The bootstrap command:
 ## File Structure Context
 
 ```
-bot.js                          Main Discord bot and Claude AI integration
-setup.js                        Interactive .env setup wizard
-sweetwater_bay_dm_guide.md      Complete DM guide (loaded as system prompt)
-discord_channel_templates/      Markdown files for Discord channel content
-  about.md
-  faq.md
-  how-to-play.md
-package.json                    Dependencies and scripts
-game_sessions.json              Persistent session storage (auto-created)
-.env                           Bot token and API key (gitignored)
+src/
+  bot.js                          Main Discord bot and Claude AI integration
+  sweetwater_bay_dm_guide.md      Complete DM guide (loaded as system prompt)
+  discord_channel_templates/      Markdown files for Discord channel content
+    welcome.md
+    sweetwater-bay.md
+  game_sessions.json              Persistent session storage (auto-created)
+package.json                      Dependencies and scripts
+.env                             Bot token and API key (gitignored)
 ```
 
 ## Key Design Patterns

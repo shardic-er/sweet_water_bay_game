@@ -2,11 +2,10 @@
   "name": "sweetwater-bay-rpg-bot",
   "version": "1.0.0",
   "description": "Discord bot for running Sweetwater Bay tabletop RPG with Claude AI as DM",
-  "main": "bot.js",
+  "main": "src/bot.js",
   "scripts": {
-    "setup": "node setup.js",
-    "start": "node bot.js",
-    "dev": "node --watch bot.js"
+    "start": "node src/bot.js",
+    "dev": "node --watch src/bot.js"
   },
   "keywords": ["discord", "bot", "rpg", "claude", "ai"],
   "author": "",
