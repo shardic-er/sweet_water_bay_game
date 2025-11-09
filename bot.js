@@ -379,9 +379,9 @@ Six months ago, Dr. Helena Marsh presented field reports from Sweetwater Bay to 
 
         const sceneOpening = `The smell hits you three miles out.
 
-Sweet-wrong, like overripe fruit in a distillery, cut with vinegar sharp enough to burn your sinuses. You pull your scarf up, but it's already coating your tongue. Behind you, another passenger leans over the rail and retches.
+Sweet-wrong, like overripe fruit in a distillery, cut with vinegar sharp enough to burn your sinuses. You pull your scarf up, but it's already coating your tongue. Behind you, another passenger has gone pale, gripping the rail.
 
-The ship's first mate, a weathered local, sees your face and grins. "That's the Reek," she says. "Breathe through your mouth for the first hour. After that, your nose gives up."
+The ship's first mate, a weathered local, sees your expression and grins. "That's the Reek," she says. "Breathe through your mouth for the first hour. After that, your nose gives up."
 
 The water changes as you cross into the bay. Deep blue becomes murky brown—the color of old beer. Your bow wave churns up froth that doesn't dissipate, just hangs there, ropy and thick. Seabirds circle overhead in massive flocks, but their flight is sluggish, almost drunk.
 
@@ -403,7 +403,7 @@ Your boot immediately slips on the slime-coated dock. You catch yourself on the 
 
 "First time?" he asks.
 
-You nod, still trying not to gag.
+You nod, trying to adjust to the assault on your senses.
 
 "You'll get used to it." He gestures at the working waterfront—boats being scraped clean, nets full of massive slug-creatures, barrels labeled CURSE VINEGAR, harvesting platforms working the bay's surface. "Harbinger Inn is two blocks up. Can't miss it—it's the building that doesn't smell like it's dying."
 
