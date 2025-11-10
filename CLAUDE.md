@@ -19,8 +19,10 @@ npm start                   # Start the bot
 npm run dev                 # Start with auto-restart (--watch mode)
 ```
 
-### Discord Bot Bootstrap
-In Discord, type `!bootstrap` (server owner only) to automatically create and populate all game channels.
+### Discord Bot Commands
+- `!bootstrap` (server owner only): Automatically create and populate all game channels
+- `!start`: Begin a new private game session
+- `!share`: Share your story to a public locked thread (use within your game thread)
 
 ## Architecture
 
@@ -29,12 +31,14 @@ In Discord, type `!bootstrap` (server owner only) to automatically create and po
 2. **Bootstrap Command** (`!bootstrap`): Creates Discord category, channels, and populates content from `discord_channel_templates/*.md` files
 3. **Game Start** (`!start`): Creates private thread, initializes session in `gameSessions` object
 4. **Gameplay Loop**: User messages in thread -> Claude API call with system prompt + conversation history -> Response split and sent
+5. **Story Sharing** (`!share`): Formats and publishes current story to a public locked thread
 
 ### Session Management
 - **Storage**: `game_sessions.json` stores all active game sessions keyed by thread ID
-- **Structure**: Each session contains `playerId`, `playerName`, `startedAt`, and `messages` array
+- **Structure**: Each session contains `playerId`, `playerName`, `startedAt`, `messages` array, and optional `sharedThreadId`
 - **Persistence**: Sessions survive bot restarts by loading from file on initialization
 - **Message Format**: Claude Messages API format with `role` and `content` fields
+- **Shared Stories**: When `!share` is used, a public thread is created/updated with formatted story content and the thread ID is stored in the session
 
 ### System Prompt Construction
 The `getSystemPrompt()` function combines:
@@ -78,7 +82,7 @@ Max tokens: 2048 per response (bot.js:262)
 - Participants: Player who ran `!start` + server owner (for moderation)
 
 ### Channel Moderation
-The `bot-commands` channel auto-deletes non-command messages to keep it clean. Allowed commands are defined in `ALLOWED_COMMANDS` array.
+The `bot-commands` channel auto-deletes non-command messages to keep it clean. Allowed commands are defined in `ALLOWED_COMMANDS` array: `!start`, `!bootstrap`, `!share`.
 
 ### Bootstrap Behavior
 The bootstrap command:
@@ -88,6 +92,18 @@ The bootstrap command:
 4. Creates channels in order from template files
 5. Posts content and sets permissions (read-only for info channels)
 6. Updates status message throughout process
+
+### Story Sharing (!share)
+The share command allows players to publish their private story to a public thread:
+1. Validates session has DM responses to share
+2. Formats story with header (player name, date, session info)
+3. Creates public thread named "Share - {playerName}: {threadId}"
+4. If thread exists, deletes entire thread and recreates it (update behavior)
+5. Posts formatted story messages split for Discord's 2000 char limit
+6. Attaches downloadable markdown file with filename pattern: `{playerName}_{date}_{threadId}.md`
+7. Locks thread to prevent replies (read-only)
+8. Stores shared thread ID in session
+9. Only works within active game threads (private threads created by !start)
 
 ### Error Handling
 - Missing DM guide: Fatal error, exits process

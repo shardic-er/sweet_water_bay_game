@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, ChannelType, EmbedBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, ChannelType, EmbedBuilder, AttachmentBuilder } = require('discord.js');
 const Anthropic = require('@anthropic-ai/sdk');
 const fs = require('fs').promises;
 const path = require('path');
@@ -21,7 +21,7 @@ const SESSIONS_FILE = path.join(__dirname, 'game_sessions.json');
 const DM_GUIDE_PATH = path.join(__dirname, 'sweetwater_bay_dm_guide.md');
 const TEMPLATES_DIR = path.join(__dirname, 'discord_channel_templates');
 const GAME_CHANNEL_NAME = 'sweetwater-bay';
-const ALLOWED_COMMANDS = ['!start', '!bootstrap'];
+const ALLOWED_COMMANDS = ['!start', '!bootstrap', '!share'];
 
 let gameSessions = {};
 let dmGuideContent = '';
@@ -60,11 +60,17 @@ async function saveSessions() {
 }
 
 function getSystemPrompt() {
-  return `You are the Dungeon Master narrating the Sweetwater Bay story. You respond ONLY as the narrator and NPCs in this world.
+  return [
+    {
+      type: 'text',
+      text: `You are the Dungeon Master narrating the Sweetwater Bay story. You respond ONLY as the narrator and NPCs in this world.
 
-${dmGuideContent}
-
-CRITICAL - NEVER BREAK CHARACTER:
+${dmGuideContent}`,
+      cache_control: { type: 'ephemeral' }
+    },
+    {
+      type: 'text',
+      text: `CRITICAL - NEVER BREAK CHARACTER:
 - NEVER acknowledge that you are an AI, assistant, or game system
 - NEVER explain game mechanics, rules, or behind-the-scenes information
 - NEVER reference "the DM guide", "instructions", or "the scenario"
@@ -92,7 +98,9 @@ Response Style:
 - Present NPCs as three-dimensional people with their own goals
 - Create meaningful tension and consequences
 
-The game has already begun with the player's arrival at the dock. Continue the story from there.`;
+The game has already begun with the player's arrival at the dock. Continue the story from there.`
+    }
+  ];
 }
 
 async function loadAllChannelConfigs() {
@@ -259,28 +267,52 @@ async function sendToClaudeAPI(threadId, userMessage) {
     content: userMessage
   });
 
-  try {
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-5',
-      max_tokens: 2048,
-      system: getSystemPrompt(),
-      messages: session.messages
-    });
+  // Retry logic for transient API errors
+  const maxRetries = 3;
+  let lastError;
 
-    const assistantMessage = response.content[0].text;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await anthropic.messages.create({
+        model: 'claude-sonnet-4-5',
+        max_tokens: 2048,
+        system: getSystemPrompt(),
+        messages: session.messages
+      });
 
-    session.messages.push({
-      role: 'assistant',
-      content: assistantMessage
-    });
+      const assistantMessage = response.content[0].text;
 
-    await saveSessions();
+      session.messages.push({
+        role: 'assistant',
+        content: assistantMessage
+      });
 
-    return assistantMessage;
-  } catch (error) {
-    console.error('Error calling Claude API:', error);
-    throw error;
+      await saveSessions();
+
+      return assistantMessage;
+    } catch (error) {
+      lastError = error;
+
+      // Only retry on overloaded errors (500) or rate limits (529)
+      const shouldRetry = error.status === 500 || error.status === 529;
+
+      if (shouldRetry && attempt < maxRetries) {
+        const delay = Math.min(1000 * Math.pow(2, attempt - 1), 10000); // Exponential backoff, max 10s
+        console.log(`API error (attempt ${attempt}/${maxRetries}), retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      } else {
+        break;
+      }
+    }
   }
+
+  // If we get here, all retries failed
+  console.error('Error calling Claude API after retries:', lastError);
+
+  // Remove the user message we added since we failed to process it
+  session.messages.pop();
+
+  throw lastError;
 }
 
 client.on('ready', () => {
@@ -455,6 +487,11 @@ Past the town, grasslands sway in waves of deep green and rust-red, and you can 
 
   if (message.author.id !== session.playerId) return;
 
+  if (message.content === '!share') {
+    await shareStory(message, threadId);
+    return;
+  }
+
   try {
     await message.channel.sendTyping();
 
@@ -511,6 +548,206 @@ function splitMessage(text, maxLength = 2000) {
   }
 
   return chunks;
+}
+
+function formatStoryForDiscord(session, sessionId) {
+  const startDate = new Date(session.startedAt).toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  });
+
+  const startTime = new Date(session.startedAt).toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  });
+
+  const headerMessage = `# Sweetwater Bay: The Tale of ${session.playerName}
+
+*A chronicle of discovery, horror, and investigation*
+
+---
+
+**Player:** ${session.playerName}
+**Session Started:** ${startDate} at ${startTime}
+**Session ID:** ${sessionId}
+**Total Exchanges:** ${Math.floor(session.messages.length / 2)}
+
+---
+
+## The Story`;
+
+  const messages = [headerMessage];
+
+  session.messages.forEach((msg) => {
+    if (msg.role === 'user') {
+      const content = `### ${session.playerName}\n\n> ${msg.content}`;
+      messages.push(content);
+    } else if (msg.role === 'assistant') {
+      const content = `### Sweetwater Bay (DM)\n\n${msg.content}\n\n---`;
+      messages.push(content);
+    }
+  });
+
+  const footerMessage = `\n\n*End of Chronicle*
+
+*This story was automatically shared from game session ${sessionId}*
+*Sweetwater Bay RPG - Powered by Claude AI*`;
+
+  messages.push(footerMessage);
+
+  return messages;
+}
+
+function generateMarkdownFile(session, sessionId) {
+  const startDate = new Date(session.startedAt).toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  });
+
+  const startTime = new Date(session.startedAt).toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  });
+
+  let markdown = `# Sweetwater Bay: The Tale of ${session.playerName}
+
+*A chronicle of discovery, horror, and investigation*
+
+---
+
+**Player:** ${session.playerName}
+**Session Started:** ${startDate} at ${startTime}
+**Session ID:** ${sessionId}
+**Total Exchanges:** ${Math.floor(session.messages.length / 2)}
+
+---
+
+## The Story
+
+`;
+
+  session.messages.forEach((msg) => {
+    if (msg.role === 'user') {
+      markdown += `### ${session.playerName}\n\n`;
+      markdown += `> ${msg.content}\n\n`;
+    } else if (msg.role === 'assistant') {
+      markdown += `### Sweetwater Bay (DM)\n\n`;
+      markdown += msg.content + '\n\n';
+      markdown += '---\n\n';
+    }
+  });
+
+  markdown += `\n\n*End of Chronicle*\n\n`;
+  markdown += `*This story was automatically shared from game session ${sessionId}*\n`;
+  markdown += `*Sweetwater Bay RPG - Powered by Claude AI*\n`;
+
+  return markdown;
+}
+
+async function shareStory(message, threadId) {
+  const session = gameSessions[threadId];
+
+  if (!session) {
+    await message.reply('No active game session found in this thread.');
+    return;
+  }
+
+  const assistantCount = session.messages.filter(m => m.role === 'assistant').length;
+  if (assistantCount === 0) {
+    await message.reply('Cannot share story - no DM responses yet. Play a bit first!');
+    return;
+  }
+
+  const statusMessage = await message.reply('Sharing your story...');
+
+  try {
+    const guild = message.guild;
+    const gameChannel = guild.channels.cache.find(
+      c => c.name === GAME_CHANNEL_NAME && !c.isThread()
+    );
+
+    if (!gameChannel) {
+      await statusMessage.edit('Error: Could not find the sweetwater-bay channel.');
+      return;
+    }
+
+    const sharedThreadName = `Share - ${session.playerName}: ${threadId}`;
+
+    let sharedThread = gameChannel.threads.cache.find(
+      t => t.name === sharedThreadName
+    );
+
+    if (sharedThread) {
+      await statusMessage.edit('Found existing shared thread, deleting and recreating...');
+
+      try {
+        await sharedThread.delete();
+      } catch (error) {
+        console.warn('Could not delete existing thread:', error.message);
+      }
+    }
+
+    await statusMessage.edit('Creating shared thread...');
+
+    sharedThread = await gameChannel.threads.create({
+      name: sharedThreadName,
+      type: ChannelType.PublicThread,
+      reason: `Shared story for ${session.playerName}`
+    });
+
+    // Delete the automatic "started a thread" announcement message
+    try {
+      const recentMessages = await gameChannel.messages.fetch({ limit: 5 });
+      const announcementMsg = recentMessages.find(
+        m => m.type === 18 && m.hasThread && m.thread.id === sharedThread.id
+      );
+      if (announcementMsg) {
+        await announcementMsg.delete();
+      }
+    } catch (error) {
+      console.warn('Could not delete thread announcement message:', error.message);
+    }
+
+    const storyMessages = formatStoryForDiscord(session, threadId);
+
+    for (const storyMsg of storyMessages) {
+      const chunks = splitMessage(storyMsg);
+      for (const chunk of chunks) {
+        await sharedThread.send(chunk);
+      }
+    }
+
+    // Generate and attach markdown file
+    const markdown = generateMarkdownFile(session, threadId);
+    const safePlayerName = session.playerName.replace(/[^a-z0-9]/gi, '_');
+    const timestamp = new Date(session.startedAt).toISOString().split('T')[0];
+    const filename = `${safePlayerName}_${timestamp}_${threadId}.md`;
+
+    const attachment = new AttachmentBuilder(Buffer.from(markdown, 'utf-8'), {
+      name: filename
+    });
+
+    await sharedThread.send({
+      content: '**Download this story as Markdown:**',
+      files: [attachment]
+    });
+
+    await sharedThread.setLocked(true);
+
+    if (!session.sharedThreadId) {
+      session.sharedThreadId = sharedThread.id;
+      await saveSessions();
+    }
+
+    await statusMessage.edit(`Story shared successfully! View it here: <#${sharedThread.id}>`);
+  } catch (error) {
+    console.error('Error sharing story:', error);
+    await statusMessage.edit(`Error sharing story: ${error.message}`);
+  }
 }
 
 async function initialize() {

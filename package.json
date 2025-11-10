@@ -5,7 +5,8 @@
   "main": "src/bot.js",
   "scripts": {
     "start": "node src/bot.js",
-    "dev": "node --watch src/bot.js"
+    "dev": "node --watch src/bot.js",
+    "export": "node src/export_story.js"
   },
   "keywords": ["discord", "bot", "rpg", "claude", "ai"],
   "author": "",

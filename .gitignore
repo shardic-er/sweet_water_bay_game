@@ -1,3 +1,4 @@
 node_modules/
 .env
 game_sessions.json
+exported_stories/
