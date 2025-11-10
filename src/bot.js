@@ -18,13 +18,44 @@ const anthropic = new Anthropic({
 });
 
 const SESSIONS_FILE = path.join(__dirname, 'game_sessions.json');
+const COST_TRACKING_FILE = path.join(__dirname, 'cost_tracking.json');
 const DM_GUIDE_PATH = path.join(__dirname, 'sweetwater_bay_dm_guide.md');
 const TEMPLATES_DIR = path.join(__dirname, 'discord_channel_templates');
 const GAME_CHANNEL_NAME = 'sweetwater-bay';
-const ALLOWED_COMMANDS = ['!start', '!bootstrap', '!share'];
+const ALLOWED_COMMANDS = ['!start', '!bootstrap', '!share', '!cost'];
+
+// Model configurations
+// https://claude.com/pricing#api
+const MODEL_CONFIGS = {
+  sonnet: {
+    model: 'claude-sonnet-4-5',
+    inputCostPer1M: 3.00,        // $3 per 1M input tokens
+    outputCostPer1M: 15.00,      // $15 per 1M output tokens
+    cacheWriteCostPer1M: 3.75,   // $3.75 per 1M cache write tokens
+    cacheReadCostPer1M: 0.30,    // $0.30 per 1M cache read tokens
+    dailyBudgetLimit: 10.00      // $10 daily hard limit
+  },
+  haiku: {
+    model: 'claude-haiku-4-5',
+    inputCostPer1M: 1.00,        // $1 per 1M input tokens
+    outputCostPer1M: 5.00,       // $5 per 1M output tokens
+    cacheWriteCostPer1M: 1.25,   // $1.25 per 1M cache write tokens
+    cacheReadCostPer1M: 0.10,    // $0.10 per 1M cache read tokens
+    dailyBudgetLimit: 5.00       // $5 daily hard limit
+  }
+};
+
+// Select model based on environment variable (defaults to 'sonnet')
+const MODEL_MODE = (process.env.MODEL_MODE || 'sonnet').toLowerCase();
+const COST_CONFIG = MODEL_CONFIGS[MODEL_MODE] || MODEL_CONFIGS.sonnet;
 
 let gameSessions = {};
 let dmGuideContent = '';
+let costTracking = {
+  dailySpend: {},
+  sessionSpend: {},
+  lastReset: new Date().toISOString().split('T')[0]
+};
 
 async function loadDMGuide() {
   try {
@@ -59,14 +90,145 @@ async function saveSessions() {
   }
 }
 
+async function loadCostTracking() {
+  try {
+    const data = await fs.readFile(COST_TRACKING_FILE, 'utf-8');
+    costTracking = JSON.parse(data);
+    console.log('Cost tracking loaded successfully');
+
+    // Check if we need to reset daily spend
+    const today = new Date().toISOString().split('T')[0];
+    if (costTracking.lastReset !== today) {
+      costTracking.dailySpend = {};
+      costTracking.lastReset = today;
+      await saveCostTracking();
+      console.log('Daily spend reset for new day');
+    }
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      costTracking = {
+        dailySpend: {},
+        sessionSpend: {},
+        lastReset: new Date().toISOString().split('T')[0]
+      };
+      await saveCostTracking();
+    } else {
+      console.error('Error loading cost tracking:', error);
+    }
+  }
+}
+
+async function saveCostTracking() {
+  try {
+    await fs.writeFile(COST_TRACKING_FILE, JSON.stringify(costTracking, null, 2));
+  } catch (error) {
+    console.error('Error saving cost tracking:', error);
+  }
+}
+
+function calculateCost(inputTokens, outputTokens, cacheCreationTokens = 0, cacheReadTokens = 0) {
+  const inputCost = (inputTokens / 1_000_000) * COST_CONFIG.inputCostPer1M;
+  const outputCost = (outputTokens / 1_000_000) * COST_CONFIG.outputCostPer1M;
+  const cacheWriteCost = (cacheCreationTokens / 1_000_000) * COST_CONFIG.cacheWriteCostPer1M;
+  const cacheReadCost = (cacheReadTokens / 1_000_000) * COST_CONFIG.cacheReadCostPer1M;
+
+  return inputCost + outputCost + cacheWriteCost + cacheReadCost;
+}
+
+function formatCost(cost) {
+  if (cost < 0.01) {
+    return `$${(cost * 100).toFixed(3)}c`; // Show as cents with 3 decimals
+  }
+  return `$${cost.toFixed(3)}`;
+}
+
+function getTodaySpend() {
+  const today = new Date().toISOString().split('T')[0];
+  return costTracking.dailySpend[today] || 0;
+}
+
+async function trackCost(threadId, usage) {
+  const inputTokens = usage.input_tokens || 0;
+  const outputTokens = usage.output_tokens || 0;
+  const cacheCreationTokens = usage.cache_creation_input_tokens || 0;
+  const cacheReadTokens = usage.cache_read_input_tokens || 0;
+
+  const cost = calculateCost(inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens);
+  const today = new Date().toISOString().split('T')[0];
+
+  // Update daily spend
+  if (!costTracking.dailySpend[today]) {
+    costTracking.dailySpend[today] = 0;
+  }
+  costTracking.dailySpend[today] += cost;
+
+  // Update session spend
+  if (!costTracking.sessionSpend[threadId]) {
+    costTracking.sessionSpend[threadId] = {
+      total: 0,
+      messages: 0,
+      totalCacheReads: 0,
+      totalCacheWrites: 0,
+      history: []
+    };
+  }
+
+  costTracking.sessionSpend[threadId].total += cost;
+  costTracking.sessionSpend[threadId].messages += 1;
+  costTracking.sessionSpend[threadId].totalCacheReads += cacheReadTokens;
+  costTracking.sessionSpend[threadId].totalCacheWrites += cacheCreationTokens;
+  costTracking.sessionSpend[threadId].history.push({
+    timestamp: new Date().toISOString(),
+    inputTokens,
+    outputTokens,
+    cacheCreationTokens,
+    cacheReadTokens,
+    cost
+  });
+
+  await saveCostTracking();
+
+  return {
+    messageCost: cost,
+    sessionTotal: costTracking.sessionSpend[threadId].total,
+    messageNumber: costTracking.sessionSpend[threadId].messages,
+    dailyTotal: costTracking.dailySpend[today],
+    cacheReadTokens,
+    cacheCreationTokens
+  };
+}
+
+function checkBudgetLimit() {
+  const todaySpend = getTodaySpend();
+
+  if (todaySpend >= COST_CONFIG.dailyBudgetLimit) {
+    return {
+      allowed: false,
+      todaySpend,
+      limit: COST_CONFIG.dailyBudgetLimit,
+      remaining: 0
+    };
+  }
+
+  return {
+    allowed: true,
+    todaySpend,
+    limit: COST_CONFIG.dailyBudgetLimit,
+    remaining: COST_CONFIG.dailyBudgetLimit - todaySpend
+  };
+}
+
 function getSystemPrompt() {
   return [
     {
       type: 'text',
       text: `You are the Dungeon Master narrating the Sweetwater Bay story. You respond ONLY as the narrator and NPCs in this world.
 
-${dmGuideContent}`,
-      cache_control: { type: 'ephemeral' }
+${dmGuideContent}`
+      // Note: Prompt caching disabled. Players typically take 10-15 minutes to read responses
+      // and craft replies, which exceeds the 5-minute cache TTL. With caching enabled, we'd
+      // pay the 25% cache write premium ($3.75/MTok) on EVERY message while getting zero
+      // benefit from cache reads. Regular input pricing ($3/MTok) is cheaper for this use case.
     },
     {
       type: 'text',
@@ -274,7 +436,7 @@ async function sendToClaudeAPI(threadId, userMessage) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       const response = await anthropic.messages.create({
-        model: 'claude-sonnet-4-5',
+        model: COST_CONFIG.model,
         max_tokens: 2048,
         system: getSystemPrompt(),
         messages: session.messages
@@ -289,7 +451,13 @@ async function sendToClaudeAPI(threadId, userMessage) {
 
       await saveSessions();
 
-      return assistantMessage;
+      // Track cost from API usage data
+      const costInfo = await trackCost(threadId, response.usage);
+
+      return {
+        message: assistantMessage,
+        costInfo
+      };
     } catch (error) {
       lastError = error;
 
@@ -315,8 +483,10 @@ async function sendToClaudeAPI(threadId, userMessage) {
   throw lastError;
 }
 
-client.on('ready', () => {
+client.on('clientReady', () => {
   console.log(`Logged in as ${client.user.tag}`);
+  console.log(`Model: ${COST_CONFIG.model} (mode: ${MODEL_MODE})`);
+  console.log(`Daily budget limit: ${formatCost(COST_CONFIG.dailyBudgetLimit)}`);
   console.log('Sweetwater Bay RPG Bot is ready!');
 });
 
@@ -492,14 +662,43 @@ Past the town, grasslands sway in waves of deep green and rust-red, and you can 
     return;
   }
 
+  if (message.content === '!cost') {
+    await showCostInfo(message, threadId);
+    return;
+  }
+
+  // Check budget limit before processing
+  const budgetCheck = checkBudgetLimit();
+  if (!budgetCheck.allowed) {
+    await message.channel.send(
+      `**Daily Budget Limit Reached**\n\n` +
+      `The bot has reached its daily budget limit of ${formatCost(budgetCheck.limit)}.\n` +
+      `Today's spend: ${formatCost(budgetCheck.todaySpend)}\n\n` +
+      `The budget will reset at midnight. Please try again tomorrow, or contact the server owner to increase the daily limit.`
+    );
+    return;
+  }
+
   try {
     await message.channel.sendTyping();
 
-    const response = await sendToClaudeAPI(threadId, message.content);
+    const result = await sendToClaudeAPI(threadId, message.content);
 
-    const chunks = splitMessage(response);
+    // Send the response chunks
+    const chunks = splitMessage(result.message);
     for (const chunk of chunks) {
       await message.channel.send(chunk);
+    }
+
+    // Check if we've crossed a $1 milestone and show cost automatically
+    const sessionCost = costTracking.sessionSpend[threadId];
+    const currentMilestone = Math.floor(sessionCost.total);
+    const previousTotal = sessionCost.total - result.costInfo.messageCost;
+    const previousMilestone = Math.floor(previousTotal);
+
+    if (currentMilestone > previousMilestone && currentMilestone > 0) {
+      // Crossed a dollar threshold, show cost info automatically
+      await showCostInfo(message, threadId);
     }
   } catch (error) {
     console.error('Error processing message:', error);
@@ -648,6 +847,47 @@ function generateMarkdownFile(session, sessionId) {
   return markdown;
 }
 
+async function showCostInfo(message, threadId) {
+  const sessionCost = costTracking.sessionSpend[threadId];
+  const today = new Date().toISOString().split('T')[0];
+  const dailyTotal = costTracking.dailySpend[today] || 0;
+
+  if (!sessionCost || sessionCost.messages === 0) {
+    await message.reply('No cost data yet. Play a bit first!');
+    return;
+  }
+
+  // Get the last response cost info
+  const lastResponse = sessionCost.history[sessionCost.history.length - 1];
+
+  const costEmbed = new EmbedBuilder()
+    .setColor(0x5865F2)  // Discord blurple
+    .setTitle('Cost Information')
+    .setDescription(`Using ${COST_CONFIG.model}`)
+    .setFooter({
+      text: `Response #${sessionCost.messages} | Daily budget is shared across all players`
+    })
+    .addFields(
+      {
+        name: 'Last Response',
+        value: formatCost(lastResponse.cost),
+        inline: true
+      },
+      {
+        name: 'Your Session Total',
+        value: `${formatCost(sessionCost.total)} (${sessionCost.messages} responses)`,
+        inline: true
+      },
+      {
+        name: 'Today (All Players)',
+        value: `${formatCost(dailyTotal)} / ${formatCost(COST_CONFIG.dailyBudgetLimit)}`,
+        inline: true
+      }
+    );
+
+  await message.reply({ embeds: [costEmbed] });
+}
+
 async function shareStory(message, threadId) {
   const session = gameSessions[threadId];
 
@@ -753,6 +993,7 @@ async function shareStory(message, threadId) {
 async function initialize() {
   await loadDMGuide();
   await loadSessions();
+  await loadCostTracking();
 
   client.login(process.env.DISCORD_TOKEN);
 }
